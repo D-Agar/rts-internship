@@ -1,0 +1,20 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/home/daniel/Documents/turtlebot3_sim/install/turtlebot3_teleop/lib/python3.10/site-packages",
+        "/home/daniel/Documents/turtlebot3_sim/install/turtlebot3_example/lib/python3.10/site-packages",
+        "/home/daniel/Documents/turtlebot3_sim/install/turtlebot3_msgs/local/lib/python3.10/dist-packages",
+        "/home/daniel/Documents/turtlebot3_sim/install/dynamixel_sdk_custom_interfaces/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/daniel/Documents/turtlebot3_sim/install/turtlebot3_teleop/lib/python3.10/site-packages",
+        "/home/daniel/Documents/turtlebot3_sim/install/turtlebot3_example/lib/python3.10/site-packages",
+        "/home/daniel/Documents/turtlebot3_sim/install/turtlebot3_msgs/local/lib/python3.10/dist-packages",
+        "/home/daniel/Documents/turtlebot3_sim/install/dynamixel_sdk_custom_interfaces/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.autoImportCompletions": true
+}

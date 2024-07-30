@@ -1,0 +1,30 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/home/daniel/Documents/turtlebot3_sim/install/turtlebot3_fake_node/include/**",
+        "/home/daniel/Documents/turtlebot3_sim/install/turtlebot3_msgs/include/**",
+        "/home/daniel/Documents/turtlebot3_sim/install/turtlebot3_gazebo/include/**",
+        "/home/daniel/Documents/turtlebot3_sim/install/dynamixel_sdk_custom_interfaces/include/**",
+        "/home/daniel/Documents/turtlebot3_sim/install/dynamixel_sdk/include/**",
+        "/opt/ros/humble/include/**",
+        "/home/daniel/Documents/turtlebot3_sim/src/DynamixelSDK/dynamixel_sdk/include/**",
+        "/home/daniel/Documents/turtlebot3_sim/src/DynamixelSDK/dynamixel_sdk_examples/include/**",
+        "/home/daniel/Documents/turtlebot3_sim/src/turtlebot3/turtlebot3_node/include/**",
+        "/home/daniel/Documents/turtlebot3_sim/src/turtlebot3_simulations/turtlebot3_fake_node/include/**",
+        "/home/daniel/Documents/turtlebot3_sim/src/turtlebot3_simulations/turtlebot3_gazebo/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}
