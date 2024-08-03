@@ -23,7 +23,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'explore = frontier_exploration.frontier_exploration_node:main'
+            'explore = frontier_exploration.frontier_exploration_node:main',
         ],
     },
 )

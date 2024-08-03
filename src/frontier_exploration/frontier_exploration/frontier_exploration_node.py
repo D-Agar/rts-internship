@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 
+from copy import deepcopy
+from math import floor, sqrt
+import math
 import rclpy
+import rclpy.logging
 from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import PoseStamped
@@ -8,131 +12,152 @@ from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 import rclpy.time
 from tf2_ros import Buffer, TransformListener
 import numpy as np
-
+from rclpy.duration import Duration
 from sklearn.cluster import DBSCAN
 from scipy.spatial import distance
+
+
 class FrontierExplorationNode(Node):
     def __init__(self):
         super().__init__('frontier_exploration_node') # type: ignore
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
         self.init_map = True
         self.frontiers = []
-        self.visited = []
+        self.visited = set()
         self.nav = BasicNavigator()
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.distance_threshold = 0.2
+        
+        # Timer variables
+        self.map_update_duration = 5.0  # Duration to wait for map update (in seconds)
+        self.map_update_timer = self.create_timer(0.5, self.update_map_timer_callback)
+        self.map_update_start_time = None
+        self.ready_to_explore = False
         
     
     def map_callback(self, msg):
-        # if self.init_map:
-        self.origin_x = msg.info.origin.position.x
-        self.origin_y = msg.info.origin.position.y
-        self.origin_theta = msg.info.origin.orientation.w
-        self.init_map = False
-            
-        # print(f"Map origin: {self.origin_x}, {self.origin_y}")
-        
+        self.get_logger().info("Occupancy Grid received")
         # Get all Occupancy grid's data as attributes
         self.map_data = msg
+        self.origin_x = msg.info.origin.position.x
+        self.origin_y = msg.info.origin.position.y    
         self.resolution = msg.info.resolution
         self.map_width = msg.info.width
         self.map_height = msg.info.height
-        # print(f"Map dimensions: {self.map_height} cols x {self.map_width} rows")
-        # Map grid is is row-major order, starting with (0, 0)
         self.grid = np.asarray(msg.data).reshape((self.map_height, self.map_width))
         
-        if self.nav.isTaskComplete():
-            self.frontiers = self.get_frontiers()
-            
-            # Sanity check: no frontiers found
-            if self.frontiers is not None:
-                frontier = self.select_frontier(self.frontiers)
-                self.cluster_frontiers()
-                self.go_to_frontier(frontier)
-            else:
-                self.get_logger().info("No more frontiers, environment explored")
-                self.shutdown()
+        # Reset map update timer each time a new map is received
+        if not self.map_update_start_time:
+            self.map_update_start_time = self.get_clock().now()
     
     
-    def get_frontiers(self):
-        frontiers = []
-        # Search through OccupancyGrid
-        for y in range(0, self.map_height-1):
-            for x in range(0, self.map_width-1):
-                # Free space is 0
-                if self.grid[y, x] == 0:
-                    # Check to see if there is an unknown cell in a 3x3 radius of chosen cell
-                    if -1 in self.grid[x-1:x+2, y-1:y+2] and (x, y) not in self.visited:
-                        frontiers.append((x, y))
-        self.get_logger().info(f'Found {len(frontiers)} frontiers')
-        return frontiers
+    def update_map_timer_callback(self):
+        """Timer callback to handle map updates."""
+        if self.map_update_start_time is not None:
+            elapsed_time = (self.get_clock().now() - self.map_update_start_time).nanoseconds / 1e9
 
-
-    def cluster_frontiers(self):
-            if not self.frontiers:
-                return
-
-            # Convert to numpy array for clustering
-            frontier_points = np.array(self.frontiers)
-
-            # Use DBSCAN clustering to group nearby frontiers
-            clustering = DBSCAN(eps=3, min_samples=2).fit(frontier_points)
-            labels = clustering.labels_
-
-            # Calculate the centroid of each cluster
-            unique_labels = set(labels)
-            clustered_frontiers = []
-            for label in unique_labels:
-                if label == -1:
-                    continue  # Ignore noise points
-                label_indices = np.where(labels == label)
-                cluster_points = frontier_points[label_indices]
-                centroid = np.mean(cluster_points, axis=0)
-                clustered_frontiers.append(centroid)
-
-            self.frontiers = [tuple(map(int, point)) for point in clustered_frontiers]
-            self.get_logger().info(f'Clustered to {len(self.frontiers)} frontier centroids')
-
-    def prioritize_frontiers(self, robot_position):
-        # Prioritize frontiers based on distance from the robot
-        prioritized_frontiers = sorted(self.frontiers, key=lambda f: distance.euclidean(robot_position, f))
-        return prioritized_frontiers
-
-
-    def select_frontier(self, frontiers):
-        # Get the current robot position
-        try:
-            map_transform = self.tf_buffer.lookup_transform('map', 'base_link', rclpy.time.Time())
-            robot_position = (
-                int(map_transform.transform.translation.y / 0.05),  # Row index
-                int(map_transform.transform.translation.x / 0.05)   # Column index
-            )
-        except Exception as e:
-            self.get_logger().error(e)
+            if elapsed_time >= self.map_update_duration:
+                self.ready_to_explore = True
+                self.get_logger().info("Map updated for 5 seconds. Finding frontiers...")
+                self.find_and_explore_frontiers()
+                self.map_update_start_time = None  # Reset the timer
+                self.ready_to_explore = False  # Reset readiness to explore
+    
+    
+    def find_and_explore_frontiers(self):
+        if not self.ready_to_explore:
             return
 
-        prioritized_frontiers = self.prioritize_frontiers(robot_position)
+        self.frontiers = self.find_frontiers()
+        if self.frontiers:
+            self.explore_frontiers()
+        else:
+            self.get_logger().info("No frontiers found! Exploration completed")
+            raise SystemExit
+    
+    
+    def find_frontiers(self):
+        frontiers = []
+        for i in range(1, self.map_height - 1):
+            for j in range(1, self.map_width - 1):
+                if self.grid[i, j] == -1:  # Unknown cell
+                    # Check if any neighboring cell is free space (0) within 20cm
+                    cell_range = round(0.1 / self.resolution)
+                    if np.any(self.grid[i-cell_range:i+cell_range, j-cell_range:j+cell_range] == 0):
+                        # frontier point = (y, x)
+                        frontier_point = (i * self.resolution + self.origin_y,
+                                          j * self.resolution + self.origin_x)
+                        if self.is_valid_frontier(frontier_point) == True:
+                            frontiers.append(frontier_point)
 
-        for frontier in prioritized_frontiers:
-            if tuple(frontier) not in self.visited:
-                self.go_to_frontier(frontier)
-                self.visited.append(tuple(frontier))
-                break  # Navigate to one frontier at a time
+        self.get_logger().info(f'Found {len(frontiers)} frontiers')
+        return frontiers
     
     
-    def go_to_frontier(self, frontier):
-        """Order the robot to traverse to a given frontier coordinate.
+    def is_valid_frontier(self, frontier):
+        # Convert back to Grid cell
+        y = floor((frontier[0] - self.origin_y) / self.resolution)
+        x = floor((frontier[1] - self.origin_x) / self.resolution)
+        
+        if self.is_already_visited(frontier) == True:
+            return False
+        
+        # Make sure it isn't near any wall
+        cell_range = round(0.1 / self.resolution)
+        if np.any(self.grid[y-cell_range:y+cell_range, x-cell_range:x+cell_range] == 100):
+            return False
+        
+        # Valid
+        return True
+    
+    
+    def is_already_visited(self, frontier):
+        for visited in self.visited:
+            if self.calculate_distance(visited, frontier) < self.distance_threshold / self.resolution:
+                return True
+        return False
 
-        Args:
-            frontier (float x, float y): A coordinate of float values
-        """
-        goal_pose = PoseStamped()
-        goal_pose.header.frame_id = 'map'
-        goal_pose.pose.position.x = frontier[0] * self.resolution + self.origin_x
-        goal_pose.pose.position.y = frontier[1] * self.resolution + self.origin_y
-        goal_pose.pose.orientation.w = 1.0  # Facing forward
-        self.nav.goToPose(goal_pose)
-    
+
+    def calculate_distance(self, pointA, pointB):
+        return np.sqrt(((pointA[0] - pointB[0]) ** 2) + ((pointA[1] - pointB[1]) ** 2))
+
+
+    def explore_frontiers(self):
+        # Select first frontier
+        frontier = self.frontiers[0]
+        self.navigate_to_frontier(frontier)
+        
+        
+    def navigate_to_frontier(self, frontier):
+        try:
+            # Create a target pose
+            target_pose = PoseStamped()
+            target_pose.header.frame_id = 'map'
+            target_pose.pose.position.x = frontier[1]
+            target_pose.pose.position.y = frontier[0]
+            target_pose.pose.orientation.w = 1.0  # Facing forward
+
+            self.nav.goToPose(target_pose)
+
+            while not self.nav.isTaskComplete():
+                feedback = self.nav.getFeedback()
+                if Duration.from_msg(feedback.navigation_time) > Duration(seconds=1200.0): # type: ignore
+                    self.get_logger().warn("Timeout occurred, cancelling goal")
+                    self.nav.cancelTask()
+
+            result = self.nav.getResult()
+            if result == TaskResult.SUCCEEDED:
+                self.get_logger().info('Navigation succeeded!')
+                self.visited.add(frontier)
+            elif result == TaskResult.CANCELED:
+                self.get_logger().warn('Navigation canceled!')
+            elif result == TaskResult.FAILED:
+                self.get_logger().error('Navigation failed!')
+
+        except Exception as e:
+            self.get_logger().error(f'Err: {str(e)}')
+            
     
     def shutdown(self):
         self.destroy_node()
@@ -142,7 +167,12 @@ class FrontierExplorationNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = FrontierExplorationNode()
-    rclpy.spin(node)
+    
+    try:
+        rclpy.spin(node)
+    except SystemExit:
+        rclpy.logging.get_logger("Quitting").info("Done")
+        
     node.destroy_node()
     rclpy.shutdown()
 
