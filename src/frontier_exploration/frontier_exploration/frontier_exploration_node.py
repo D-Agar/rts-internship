@@ -3,6 +3,7 @@
 from copy import deepcopy
 from math import floor, sqrt
 import math
+from tkinter.tix import Tree
 import rclpy
 import rclpy.logging
 from rclpy.node import Node
@@ -39,11 +40,13 @@ class FrontierExplorationNode(Node):
         )
         self.frontiers = []
         self.visited = set()
+        self.failed = set()  # Set to hold all failed navigations
         self.nav = BasicNavigator()
         self.distance_threshold = 0.2
 
         # Timer variables
-        self.map_update_duration = 5.0  # Duration to wait for map update (in seconds)
+        # Duration to wait for map update (in seconds)
+        self.map_update_duration = 5.0
         self.map_update_timer = self.create_timer(0.5, self.update_map_timer_callback)
         self.map_update_start_time = None
         self.ready_to_explore = False
@@ -98,12 +101,20 @@ class FrontierExplorationNode(Node):
 
         self.frontiers = self.find_frontiers()
         if self.frontiers:
-            # Select first frontier
             frontier = self.select_frontier()
             self.navigate_to_frontier(frontier)
         else:
-            self.get_logger().info("No frontiers found! Exploration completed")
-            raise SystemExit
+            # Check failed frontiers to see if they can be re-explored
+            self.frontiers = self.try_failed_frontiers()
+            if self.frontiers:
+                self.get_logger().info(
+                    "No frontiers left, trying previously failed frontiers"
+                )
+                frontier = self.select_frontier()
+                self.navigate_to_frontier(frontier)
+            else:
+                self.get_logger().info("No frontiers found! Exploration completed")
+                raise SystemExit
 
     def find_frontiers(self):
         """Function which selects all viable frontiers.
@@ -130,16 +141,8 @@ class FrontierExplorationNode(Node):
                             j * self.resolution + self.origin_x,
                         )
                         if self.is_valid_frontier(frontier_point) == True:
-                            # Add [frontier, unknown_cell_count] to frontiers
-                            # for better frontier selection
-                            # If no unknowns, set occurrence to 0
-                            check_region = self.grid[i - 2 : i + 2, j - 2 : j + 2]
-                            unique, counts = np.unique(check_region, return_counts=True)
-                            occurrences = dict(zip(unique, counts))
-                            try:
-                                frontiers.append([frontier_point, occurrences[-1]])
-                            except KeyError:
-                                frontiers.append([frontier_point, 0])
+                            unknowns = self.count_unknown_neighbours(j, i)
+                            frontiers.append([frontier_point, unknowns])
 
         self.get_logger().info(f"Found {len(frontiers)} frontiers")
         return frontiers
@@ -174,7 +177,7 @@ class FrontierExplorationNode(Node):
 
         try:
             if occurrences[100] > 2:
-                self.get_logger().warn("Frontier near too many obstacles")
+                # self.get_logger().warn("Frontier near too many obstacles")
                 return False
             else:
                 return True
@@ -186,7 +189,7 @@ class FrontierExplorationNode(Node):
         """Determines if a frontier has already been visited.
 
         A frontier is classed as visited if it's withing a certain proximity of
-        other previously visited frontiers.
+        other previously visited or failed frontiers.
 
         Args:
             frontier (tuple(int, int)): Frontier coordinate (y, x)
@@ -197,7 +200,8 @@ class FrontierExplorationNode(Node):
         for visited in self.visited:
             if self.calculate_distance(visited, frontier) < self.distance_threshold:
                 return True
-        return False
+
+        return self.visited_failed(frontier)
 
     def calculate_distance(self, pointA, pointB):
         """Calculates the distance (in metres) between two coordinates.
@@ -210,6 +214,58 @@ class FrontierExplorationNode(Node):
             ndarray: The Euclidean distance between the two points.
         """
         return np.sqrt(((pointA[0] - pointB[0]) ** 2) + ((pointA[1] - pointB[1]) ** 2))
+
+    def visited_failed(self, frontier):
+        """Determine if a failed frontier has previously been visited
+
+        Args:
+            frontier (list[y, x]): coordinate of frontier
+
+        Returns:
+            boolean: Indicates whether it has already been visited
+        """
+        for failed in self.failed:
+            if self.calculate_distance(failed, frontier) < self.distance_threshold:
+                return True
+        return False
+
+    def count_unknown_neighbours(self, x, y):
+        """Counts the number of unknown neighbouring points around a given coordinate.
+
+        Args:
+            x (int): X coordinate
+            y (int): Y coordinate
+
+        Returns:
+            int: number of neighbouring unknown points
+        """
+        check_region = self.grid[y - 2 : y + 2, x - 2 : x + 2]
+        unique, counts = np.unique(check_region, return_counts=True)
+        occurrences = dict(zip(unique, counts))
+        # If no unknowns, set occurrence to 0
+        try:
+            return occurrences[-1]
+        except KeyError:
+            return 0
+
+    def try_failed_frontiers(self):
+        """See if any of the failed frontiers are still unknown and try to navigate there.
+
+        Returns:
+            list: list([frontier, neighbour occurrences])
+        """
+        frontiers = []
+        # Check if any are still unknown
+        for failed in self.failed:
+            grid_x = floor((failed[1] - self.origin_x) / self.resolution)
+            grid_y = floor((failed[0] - self.origin_y) / self.resolution)
+            if self.grid[grid_y, grid_x] == -1:
+                unknown = self.count_unknown_neighbours(grid_x, grid_y)
+                frontiers.append([failed, unknown])
+                self.failed.remove(failed)
+
+        self.get_logger().info(f"Found {len(frontiers)} failed frontiers")
+        return frontiers
 
     def select_frontier(self):
         """Selection function for a frontier
@@ -259,6 +315,7 @@ class FrontierExplorationNode(Node):
                 self.get_logger().warn("Navigation canceled!")
             elif result == TaskResult.FAILED:
                 self.get_logger().error("Navigation failed!")
+                self.failed.add(frontier)
 
         except Exception as e:
             self.get_logger().error(f"Err: {str(e)}")
