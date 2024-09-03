@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 import os
 import glob
 
-package_name = "frontier_exploration"
+package_name = "turtlebot_slam"
 
 setup(
     name=package_name,
@@ -16,21 +16,18 @@ setup(
             glob.glob(os.path.join("launch", "*launch.[pxy][yma]*")),
         ),
         (
-            os.path.join("share", package_name, "worlds"),
-            glob.glob(os.path.join("worlds", "*.world"), recursive=True),
+            os.path.join("share", package_name, "params"),
+            glob.glob(os.path.join("params", "*.yaml")),
         ),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="daniel",
-    maintainer_email="daniel@todo.todo",
+    maintainer_email="danieljagar@outlook.com",
     description="TODO: Package description",
     license="TODO: License declaration",
     tests_require=["pytest"],
     entry_points={
-        "console_scripts": [
-            "explore = frontier_exploration.frontier_exploration_node:main",
-            "assisted_explore = frontier_exploration.frontier_exploration_point_node:main",
-        ],
+        "console_scripts": [],
     },
 )

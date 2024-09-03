@@ -4,27 +4,29 @@ from copy import deepcopy
 from math import floor, sqrt
 import math
 from tkinter.tix import Tree
+import frontier_exploration
 import rclpy
 import rclpy.logging
 from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PointStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 import rclpy.time
 import numpy as np
 from rclpy.duration import Duration
 
 
-class FrontierExplorationNode(Node):
+class FrontierExplorationGoalNode(Node):
     """Frontier-based Exploration ROS 2 node for Humble Hawksbill.
 
     This ROS 2 node takes data from the robot's Occupancy Grid
-    which is used to locate and navigate to frontiers in an unknown environment.
+    which is used to locate and navigate frontiers to reach a manually selected goal.
 
     Attributes:
         map_sub: A subsciber to the Occupancy Grid with an assigned callback.
         frontiers: A list containing the frontiers after an Occupancy Grid update.
         visited: A set containing all visited frontiers.
+        point_sub: A subscriber to the '/clicked_point' topic from rivz.
         nav: An instance of Navigation2's simple commander.
         distance_threshold: Threshold (metres) for close adjacent frontiers
         map_update_duration: Duration to wait for map update (seconds)
@@ -38,11 +40,17 @@ class FrontierExplorationNode(Node):
         self.map_sub = self.create_subscription(
             OccupancyGrid, "/map", self.map_callback, 10
         )
+        self.point_sub = self.create_subscription(
+            PointStamped, "/clicked_point", self.point_callback, 10
+        )
+
         self.frontiers = []
         self.visited = set()
         self.failed = set()  # Set to hold all failed navigations
         self.nav = BasicNavigator()
         self.distance_threshold = 0.2
+        self.last_goal_x = None
+        self.last_goal_y = None
 
         # Timer variables
         # Duration to wait for map update (in seconds)
@@ -74,6 +82,20 @@ class FrontierExplorationNode(Node):
         if not self.map_update_start_time:
             self.map_update_start_time = self.get_clock().now()
 
+    def point_callback(self, msg):
+        """Callback function from the Publish Point subscriber from RViz2
+
+        This callback function stores the clicked point from RViz2 and is used
+        as the end goal of the exploration.
+
+        Args:
+            msg (Message): Data about the Published Point
+        """
+        self.get_logger().info("Exploration Goal Point received")
+        self.point_data = msg
+        self.goal_x = msg.point.x
+        self.goal_y = msg.point.y
+
     def update_map_timer_callback(self):
         """Timer callback to handle map updates."""
         if self.map_update_start_time is not None:
@@ -86,9 +108,44 @@ class FrontierExplorationNode(Node):
                 self.get_logger().info(
                     "Map updated for 5 seconds. Finding frontiers..."
                 )
-                self.find_and_explore_frontiers()
+                # TODO: Improve try algorithm
+                self.try_reach_goal()
+
+                # Check to see if robot has reached desired goal
+                # Use robot's last destination as position
+                if self.last_goal_x is not None:
+                    if self.goal_distance((self.last_goal_y, self.last_goal_x)) < (
+                        0.1 / self.resolution
+                    ):
+                        self.get_logger().info("Goal reached!")
+                        self.last_goal_x = None
+                        self.last_goal_y = None
+                        raise SystemExit
+
                 self.map_update_start_time = None  # Reset the timer
                 self.ready_to_explore = False  # Reset readiness to explore
+
+    def try_reach_goal(self):
+        try:
+            # Convert back to Grid cell
+            y = floor((self.goal_y - self.origin_y) / self.resolution)
+            x = floor((self.goal_x - self.origin_x) / self.resolution)
+
+            # Goal is unknown still
+            if self.grid[y, x] == -1:
+                self.find_and_explore_frontiers()
+            # Goal is known, unoccupied space
+            elif self.grid[y, x] == 0:
+                self.navigate_to_location((self.goal_y, self.goal_x))
+
+        except IndexError:
+            self.get_logger().warn(
+                "Location not currently in Occupancy Grid, keep exploring"
+            )
+            self.find_and_explore_frontiers()
+        except AttributeError:
+            # Goal not been selected yet
+            pass
 
     def find_and_explore_frontiers(self):
         """Contoller function for the Node's exploration logic.
@@ -102,7 +159,7 @@ class FrontierExplorationNode(Node):
         self.frontiers = self.find_frontiers()
         if self.frontiers:
             frontier = self.select_frontier()
-            self.navigate_to_frontier(frontier)
+            self.navigate_to_location(frontier)
         else:
             # Check failed frontiers to see if they can be re-explored
             self.frontiers = self.try_failed_frontiers()
@@ -111,7 +168,7 @@ class FrontierExplorationNode(Node):
                     "No frontiers left, trying previously failed frontiers"
                 )
                 frontier = self.select_frontier()
-                self.navigate_to_frontier(frontier)
+                self.navigate_to_location(frontier)
             else:
                 self.get_logger().info("No frontiers found! Exploration completed")
                 raise SystemExit
@@ -267,6 +324,17 @@ class FrontierExplorationNode(Node):
         self.get_logger().info(f"Found {len(frontiers)} failed frontiers")
         return frontiers
 
+    def goal_distance(self, frontier):
+        """Calculate the distance between a given frontier and the goal.
+
+        Args:
+            frontier (tuple): A given coordinate of a frontier (y, x)
+        """
+        f_x = frontier[1]
+        f_y = frontier[0]
+
+        return np.sqrt(((f_x - self.goal_x) ** 2) + ((f_y - self.goal_y) ** 2))
+
     def select_frontier(self):
         """Selection function for a frontier
 
@@ -277,12 +345,17 @@ class FrontierExplorationNode(Node):
         # frontier = self.frontiers[0][0]
 
         # # Approach 2: Select frontier based on number of neighbouring unknowns
-        sorted_frontiers = sorted(self.frontiers, reverse=True, key=lambda f: f[1])
-        frontier = sorted_frontiers[0][0]
+        # sorted_frontiers = sorted(self.frontiers, reverse=True, key=lambda f: f[1])
 
+        # Approach 3: Select frontier based on how close it is to the goal
+        sorted_frontiers = sorted(
+            self.frontiers, key=lambda f: self.goal_distance(f[0])
+        )
+
+        frontier = sorted_frontiers[0][0]
         return frontier
 
-    def navigate_to_frontier(self, frontier):
+    def navigate_to_location(self, frontier):
         """Order the robot to navigate to a given frontier.
 
         Args:
@@ -308,6 +381,9 @@ class FrontierExplorationNode(Node):
             if result == TaskResult.SUCCEEDED:
                 self.get_logger().info("Navigation succeeded!")
                 prev_visted_len = len(self.visited)
+                # Only save robot position if it was a success
+                self.last_goal_x = frontier[1]
+                self.last_goal_y = frontier[0]
                 self.visited.add(frontier)
                 if len(self.visited) == prev_visted_len:
                     self.get_logger().warn("Visited set not incremented")
@@ -333,7 +409,7 @@ def main(args=None):
         args (List[str], optional): Args to be passed to the node. Defaults to None.
     """
     rclpy.init(args=args)
-    node = FrontierExplorationNode()
+    node = FrontierExplorationGoalNode()
 
     try:
         rclpy.spin(node)
