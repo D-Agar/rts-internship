@@ -41,8 +41,10 @@ class FrontierExplorationGoalNode(Node):
             OccupancyGrid, "/map", self.map_callback, 10
         )
         self.point_sub = self.create_subscription(
-            PointStamped, "/clicked_point", self.point_callback, 10
+            PoseStamped, "/goal_pose", self.goal_callback, 10
         )
+
+        self.selected_goal = False
 
         self.frontiers = []
         self.visited = set()
@@ -82,7 +84,7 @@ class FrontierExplorationGoalNode(Node):
         if not self.map_update_start_time:
             self.map_update_start_time = self.get_clock().now()
 
-    def point_callback(self, msg):
+    def goal_callback(self, msg):
         """Callback function from the Publish Point subscriber from RViz2
 
         This callback function stores the clicked point from RViz2 and is used
@@ -91,10 +93,13 @@ class FrontierExplorationGoalNode(Node):
         Args:
             msg (Message): Data about the Published Point
         """
-        self.get_logger().info("Exploration Goal Point received")
-        self.point_data = msg
-        self.goal_x = msg.point.x
-        self.goal_y = msg.point.y
+        self.nav.cancelTask()
+        if self.selected_goal == False:
+            self.get_logger().info("Exploration Goal Point received")
+            self.point_data = msg
+            self.goal_x = msg.pose.position.x
+            self.goal_y = msg.pose.position.y
+            self.selected_goal = True
 
     def update_map_timer_callback(self):
         """Timer callback to handle map updates."""
@@ -103,39 +108,38 @@ class FrontierExplorationGoalNode(Node):
                 self.get_clock().now() - self.map_update_start_time
             ).nanoseconds / 1e9
 
-            if elapsed_time >= self.map_update_duration:
+            if elapsed_time >= self.map_update_duration and self.selected_goal:
                 self.ready_to_explore = True
                 self.get_logger().info(
-                    "Map updated for 5 seconds. Finding frontiers..."
+                    "Map updated and Goal selected. Finding frontiers..."
                 )
-                # TODO: Improve try algorithm
                 self.try_reach_goal()
 
                 # Check to see if robot has reached desired goal
                 # Use robot's last destination as position
                 if self.last_goal_x is not None:
                     if self.goal_distance((self.last_goal_y, self.last_goal_x)) < (
-                        0.1 / self.resolution
+                        0.05 / self.resolution
                     ):
                         self.get_logger().info("Goal reached!")
                         self.last_goal_x = None
                         self.last_goal_y = None
-                        raise SystemExit
+                        self.selected_goal = False
 
                 self.map_update_start_time = None  # Reset the timer
                 self.ready_to_explore = False  # Reset readiness to explore
 
     def try_reach_goal(self):
         try:
-            # Convert back to Grid cell
-            y = floor((self.goal_y - self.origin_y) / self.resolution)
-            x = floor((self.goal_x - self.origin_x) / self.resolution)
+            # Convert goal back to Grid cell
+            goal_grid_y = floor((self.goal_y - self.origin_y) / self.resolution)
+            goal_grid_x = floor((self.goal_x - self.origin_x) / self.resolution)
 
             # Goal is unknown still
-            if self.grid[y, x] == -1:
+            if self.grid[goal_grid_y, goal_grid_x] == -1:
                 self.find_and_explore_frontiers()
             # Goal is known, unoccupied space
-            elif self.grid[y, x] == 0:
+            elif self.grid[goal_grid_y, goal_grid_x] == 0:
                 self.navigate_to_location((self.goal_y, self.goal_x))
 
         except IndexError:
@@ -380,6 +384,7 @@ class FrontierExplorationGoalNode(Node):
             result = self.nav.getResult()
             if result == TaskResult.SUCCEEDED:
                 self.get_logger().info("Navigation succeeded!")
+                # Finished navigation
                 prev_visted_len = len(self.visited)
                 # Only save robot position if it was a success
                 self.last_goal_x = frontier[1]

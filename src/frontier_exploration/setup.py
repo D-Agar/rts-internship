@@ -19,6 +19,10 @@ setup(
             os.path.join("share", package_name, "worlds"),
             glob.glob(os.path.join("worlds", "*.world"), recursive=True),
         ),
+        (
+            os.path.join("share", package_name, "config"),
+            glob.glob(os.path.join("config", "*.rviz")),
+        ),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -30,7 +34,7 @@ setup(
     entry_points={
         "console_scripts": [
             "explore = frontier_exploration.frontier_exploration_node:main",
-            "assisted_explore = frontier_exploration.frontier_exploration_point_node:main",
+            "assisted_explore = frontier_exploration.frontier_exploration_assisted_node:main",
         ],
     },
 )
