@@ -21,7 +21,7 @@ setup(
         ),
         (
             os.path.join("share", package_name, "config"),
-            glob.glob(os.path.join("config", "*.rviz")),
+            glob.glob(os.path.join("config", "*")),
         ),
     ],
     install_requires=["setuptools"],
