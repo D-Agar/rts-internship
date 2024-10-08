@@ -49,7 +49,7 @@ def generate_launch_description():
 
     exploration = Node(
         package="frontier_exploration",
-        executable="explore",
+        executable="assisted_explore",
         name="exploration",
     )
 

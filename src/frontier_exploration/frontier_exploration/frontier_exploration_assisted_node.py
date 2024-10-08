@@ -26,7 +26,7 @@ class FrontierExplorationGoalNode(Node):
         map_sub: A subsciber to the Occupancy Grid with an assigned callback.
         frontiers: A list containing the frontiers after an Occupancy Grid update.
         visited: A set containing all visited frontiers.
-        point_sub: A subscriber to the '/clicked_point' topic from rivz.
+        point_sub: A subscriber to the '/goal_pose' topic from rivz (2D Goal Pose).
         nav: An instance of Navigation2's simple commander.
         distance_threshold: Threshold (metres) for close adjacent frontiers
         map_update_duration: Duration to wait for map update (seconds)
